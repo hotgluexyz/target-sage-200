@@ -1,26 +1,37 @@
-"""Sage200 target class."""
-
-from __future__ import annotations
-
 from singer_sdk import typing as th
-from singer_sdk.target_base import Target
 from target_hotglue.target import TargetHotglue
 
 from target_sage_200.sinks import (
-    Sage200Sink,
+    CreditNotesSink,
+    CustomersSink,
+    InvoicesSink,
+    ProductCategoriesSink,
+    ProductsSink,
+    SalesOrdersSink,
 )
 
 
-class TargetSage200(Target, TargetHotglue):
-    """Sample target for Sage200."""
-
+class TargetSage200(TargetHotglue):
     name = "target-sage-200"
-
-    SINK_TYPES = []
     MAX_PARALLELISM = 1
-
-    def get_sink_class(self, stream_name: str):
-        return Sage200Sink
+    SINK_TYPES = [
+        ProductCategoriesSink,
+        ProductsSink,
+        CustomersSink,
+        SalesOrdersSink,
+        InvoicesSink,
+        CreditNotesSink,
+    ]
+    config_jsonschema = th.PropertiesList(
+        th.Property("client_id", th.StringType, required=True),
+        th.Property("client_secret", th.StringType, required=True),
+        th.Property("refresh_token", th.StringType, required=True),
+        th.Property("access_token", th.StringType),
+        th.Property("site_id", th.StringType, required=True),
+        th.Property("company_id", th.IntegerType, required=True),
+        th.Property("base_url", th.StringType),
+        th.Property("default_nominal_code", th.StringType),
+    ).to_dict()
 
 
 if __name__ == "__main__":
