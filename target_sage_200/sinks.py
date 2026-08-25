@@ -19,7 +19,19 @@ class ProductCategoriesSink(Sage200Sink):
         })
 
     def upsert_record(self, record, context):
-        return self.upsert_by_field(record, "code")
+        """Look up only: this Sage build returns 404 for POST/PUT on product_groups."""
+        existing = self.lookup(
+            self.endpoint,
+            f"code eq {odata_string_literal(record['code'])}",
+        )
+        if existing:
+            return existing["id"], True, {}
+        self.logger.warning(
+            "Product group %s not found and cannot be created via API; "
+            "products will use default_product_group if configured",
+            record.get("code"),
+        )
+        return None, True, {"is_skipped": True}
 
 
 class ProductsSink(Sage200Sink):
@@ -27,16 +39,24 @@ class ProductsSink(Sage200Sink):
     endpoint = "/products"
 
     def preprocess_record(self, record, context):
-        group = self.lookup(
-            "/product_groups",
-            f"code eq {odata_string_literal(record['product_group'])}",
-        )
+        group = self.resolve_product_group(record["product_group"])
+        if not group:
+            raise Exception(
+                f"Product group {record['product_group']!r} not found; set "
+                "default_product_group in config to an existing Sage product group code"
+            )
         return self.clean_payload({
             "code": record["code"],
             "name": record["name"],
             "product_group_id": group["id"],
             "tax_code_id": self.get_tax_code_id(record.get("tax_code")),
             "allow_sales_order": True,
+            "warehouse_holdings": [{
+                "warehouse_id": self.get_warehouse_id(),
+                "reorder_level": 0,
+                "minimum_level": 0,
+                "maximum_level": 0,
+            }],
         })
 
     def upsert_record(self, record, context):
@@ -138,12 +158,8 @@ class LedgerDocumentSink(Sage200Sink):
             "document_goods_value": goods,
             "document_tax_value": tax,
         }
-        if lines:
-            tax_code_id = self.get_tax_code_id(lines[0].get("tax_code"))
-            if tax_code_id:
-                payload["tax_analysis_items"] = [
-                    {"tax_code_id": tax_code_id, "tax_value": tax}
-                ]
+        # Do not send tax_analysis_items on create: Sage rejects them without an id
+        # (SageNullFieldException). A goods/tax total alone is enough to post.
         nominal = self.config.get("default_nominal_code")
         if nominal:
             payload["nominal_analysis_items"] = [{"code": nominal, "goods_value": goods}]

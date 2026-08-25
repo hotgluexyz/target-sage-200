@@ -14,12 +14,16 @@ plugins:
     - about
     - stream-maps
     - record-flattening
-    config:
-      start_date: '2010-01-01T00:00:00Z'
     settings:
-    # TODO: To configure using Meltano, declare settings and their types here:
-    - name: username
-    - name: password
+    - name: client_id
+    - name: client_secret
       kind: password
-    - name: start_date
-      value: '2010-01-01T00:00:00Z'
+    - name: refresh_token
+      kind: password
+    - name: access_token
+      kind: password
+    - name: site_id
+    - name: company_id
+      kind: integer
+    - name: base_url
+    - name: default_nominal_code

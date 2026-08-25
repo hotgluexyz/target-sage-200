@@ -31,6 +31,19 @@ class TargetSage200(TargetHotglue):
         th.Property("company_id", th.IntegerType, required=True),
         th.Property("base_url", th.StringType),
         th.Property("default_nominal_code", th.StringType),
+        th.Property(
+            "default_product_group",
+            th.StringType,
+            description=(
+                "Existing Sage product group code used when the ETL group cannot "
+                "be created (product_groups POST is unavailable on some sites)"
+            ),
+        ),
+        th.Property(
+            "warehouse_id",
+            th.IntegerType,
+            description="Warehouse id for product warehouse_holdings; defaults to first sales warehouse",
+        ),
     ).to_dict()
 
 

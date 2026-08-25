@@ -1,3 +1,10 @@
+from dateutil import parser
+from singer_sdk.exceptions import FatalAPIError, RetriableAPIError
+from singer_sdk.helpers._typing import (
+    DatetimeErrorTreatmentEnum,
+    get_datelike_property_type,
+    handle_invalid_timestamp_in_record,
+)
 from target_hotglue.client import HotglueSink
 
 from target_sage_200.auth import Sage200Authenticator
@@ -9,6 +16,25 @@ BASE_URL = "https://api.columbus.sage.com/uk/sage200extra/accounts/v1"
 def odata_string_literal(value):
     """Quote a value for an OData $filter, doubling embedded single quotes."""
     return "'" + str(value).replace("'", "''") + "'"
+
+
+def response_records(payload):
+    """Normalize Sage list payloads to a list of records.
+
+    Columbus sometimes returns a bare JSON array and sometimes an OData
+    ``{"value": [...]}`` wrapper, depending on the endpoint and query.
+    """
+    if payload is None:
+        return []
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        value = payload.get("value")
+        if isinstance(value, list):
+            return value
+        if payload.get("id") is not None or payload.get("urn") is not None:
+            return [payload]
+    return []
 
 
 class Sage200Sink(HotglueSink):
@@ -35,6 +61,51 @@ class Sage200Sink(HotglueSink):
             self._authenticator = Sage200Authenticator(self._target)
         return self._authenticator
 
+    def _parse_timestamps_in_record(self, record, schema, treatment):
+        """Skip fields absent from the schema (ETL emits empty properties {}).
+
+        singer-sdk 0.9 indexes schema["properties"][key] for every record key and
+        KeyErrors when the SCHEMA message has no property definitions.
+        """
+        properties = (schema or {}).get("properties") or {}
+        for key in list(record.keys()):
+            if key not in properties:
+                continue
+            datelike_type = get_datelike_property_type(properties[key])
+            if not datelike_type:
+                continue
+            date_val = record[key]
+            try:
+                if record[key] is not None:
+                    date_val = parser.parse(record[key])
+            except Exception as ex:
+                date_val = handle_invalid_timestamp_in_record(
+                    record,
+                    [key],
+                    date_val,
+                    datelike_type,
+                    ex,
+                    treatment or DatetimeErrorTreatmentEnum.ERROR,
+                    self.logger,
+                )
+            record[key] = date_val
+
+    def validate_response(self, response):
+        """Surface status/path when Sage returns an empty error body (common on 401)."""
+        if response.status_code in [429] or 500 <= response.status_code < 600:
+            raise RetriableAPIError(self.response_error_message(response), response)
+        if 400 <= response.status_code < 500:
+            body = (response.text or "").strip()
+            if not body:
+                body = self.response_error_message(response)
+                if response.status_code == 401:
+                    body += (
+                        " — check site_id/company_id and that GET /sites returns this "
+                        "site for the authenticated Sage ID"
+                    )
+            raise FatalAPIError(body)
+        return None
+
     def lookup(self, endpoint, filter_expr):
         """Return the first record matching an OData filter, or None.
 
@@ -45,7 +116,7 @@ class Sage200Sink(HotglueSink):
         if cache_key in Sage200Sink._cache:
             return Sage200Sink._cache[cache_key]
         resp = self.request_api("GET", endpoint=endpoint, params={"$filter": filter_expr})
-        values = resp.json().get("value") or []
+        values = response_records(resp.json())
         if not values:
             return None
         Sage200Sink._cache[cache_key] = values[0]
@@ -56,9 +127,43 @@ class Sage200Sink(HotglueSink):
         if not Sage200Sink._tax_codes:
             resp = self.request_api("GET", endpoint="/tax_codes")
             Sage200Sink._tax_codes = {
-                str(t["code"]): t["id"] for t in resp.json().get("value", [])
+                str(t["code"]): t["id"] for t in response_records(resp.json())
             }
         return Sage200Sink._tax_codes.get(str(code))
+
+    def get_warehouse_id(self):
+        """Return configured warehouse_id, or the first warehouse flagged for sales trading."""
+        if self.config.get("warehouse_id") is not None:
+            return self.config["warehouse_id"]
+        cache_key = ("/warehouses", "__default__")
+        if cache_key in Sage200Sink._cache:
+            return Sage200Sink._cache[cache_key]["id"]
+        resp = self.request_api("GET", endpoint="/warehouses")
+        warehouses = response_records(resp.json())
+        chosen = next(
+            (w for w in warehouses if w.get("use_for_sales_trading")),
+            warehouses[0] if warehouses else None,
+        )
+        if not chosen:
+            raise FatalAPIError("No warehouses available to attach product warehouse_holdings")
+        Sage200Sink._cache[cache_key] = chosen
+        return chosen["id"]
+
+    def resolve_product_group(self, code):
+        """Look up a product group by code, falling back to default_product_group."""
+        group = self.lookup(
+            "/product_groups",
+            f"code eq {odata_string_literal(code)}",
+        )
+        if group:
+            return group
+        default = self.config.get("default_product_group")
+        if not default or default == code:
+            return None
+        return self.lookup(
+            "/product_groups",
+            f"code eq {odata_string_literal(default)}",
+        )
 
     def upsert_by_field(self, record, field):
         """Create the record, or update it in place if the field already matches one.
@@ -71,10 +176,17 @@ class Sage200Sink(HotglueSink):
         existing = self.lookup(self.endpoint, filter_expr)
         if existing:
             record_id = existing["id"]
-            payload = {k: v for k, v in record.items() if k != field}
+            # Nested collections (contacts, warehouse_holdings, etc.) need their own
+            # ids on PUT; strip them so updates only refresh scalar fields.
+            payload = {
+                k: v
+                for k, v in record.items()
+                if k != field and not isinstance(v, (list, dict))
+            }
             self.request_api("PUT", endpoint=f"{self.endpoint}/{record_id}", request_data=payload)
             return record_id, True, {"is_updated": True}
         resp = self.request_api("POST", endpoint=self.endpoint, request_data=record)
-        record_id = resp.json().get("id")
+        body = resp.json()
+        record_id = body.get("id") if isinstance(body, dict) else None
         Sage200Sink._cache[(self.endpoint, filter_expr)] = {**record, "id": record_id}
         return record_id, True, {}

@@ -36,6 +36,15 @@ def test_odata_string_literal():
     assert odata_string_literal("O'Brien") == "'O''Brien'"
 
 
+def test_empty_schema_timestamp_parse_skips_unknown_keys(target):
+    """ETL SCHEMA messages use empty properties; must not KeyError on record keys."""
+    sink = ProductCategoriesSink(target, "ProductCategories", SCHEMA, [])
+    record = {"code": "599iPhone", "description": "599iPhone", "invoice_date": "2024-10-01"}
+    sink._parse_timestamps_in_record(record, SCHEMA, None)
+    assert record["code"] == "599iPhone"
+    assert record["invoice_date"] == "2024-10-01"
+
+
 def test_customer_lookup_miss_posts(target):
     sink = CustomersSink(target, "Customers", SCHEMA, [])
     calls = []
@@ -96,11 +105,13 @@ def test_product_lookup_miss_posts(target):
     def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
         calls.append((http_method, endpoint, params, request_data))
         if http_method == "GET" and endpoint == "/product_groups":
-            return FakeResponse({"value": [{"id": 10, "code": "599iPhone"}]})
+            return FakeResponse([{"id": 10, "code": "599iPhone"}])
         if http_method == "GET" and endpoint == "/tax_codes":
-            return FakeResponse({"value": [{"id": 99, "code": 0}]})
+            return FakeResponse([{"id": 99, "code": 0}])
+        if http_method == "GET" and endpoint == "/warehouses":
+            return FakeResponse([{"id": 5, "use_for_sales_trading": True}])
         if http_method == "GET":
-            return FakeResponse({"value": []})
+            return FakeResponse([])
         return FakeResponse({"id": 55}, 201)
 
     sink.request_api = fake_request
@@ -115,6 +126,7 @@ def test_product_lookup_miss_posts(target):
     )
     assert record["product_group_id"] == 10
     assert record["tax_code_id"] == 99
+    assert record["warehouse_holdings"][0]["warehouse_id"] == 5
     record_id, success, _ = sink.upsert_record(record, {})
     assert success
     assert record_id == 55
@@ -123,14 +135,40 @@ def test_product_lookup_miss_posts(target):
     assert "PUT" not in methods
 
 
-def test_product_category_put_on_hit(target):
+def test_product_falls_back_to_default_product_group(target):
+    target._config["default_product_group"] = "ACCESSORIES"
+    sink = ProductsSink(target, "Products", SCHEMA, [])
+
+    def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
+        if http_method == "GET" and endpoint == "/product_groups":
+            filt = (params or {}).get("$filter", "")
+            if "599iPhone" in filt:
+                return FakeResponse([])
+            if "ACCESSORIES" in filt:
+                return FakeResponse([{"id": 22, "code": "ACCESSORIES"}])
+            return FakeResponse([])
+        if http_method == "GET" and endpoint == "/tax_codes":
+            return FakeResponse([{"id": 99, "code": 0}])
+        if http_method == "GET" and endpoint == "/warehouses":
+            return FakeResponse([{"id": 5, "use_for_sales_trading": True}])
+        return FakeResponse([])
+
+    sink.request_api = fake_request
+    record = sink.preprocess_record(
+        {"code": "599IphoneX", "name": "599 IPhone X", "product_group": "599iPhone", "tax_code": "0"},
+        {},
+    )
+    assert record["product_group_id"] == 22
+
+
+def test_product_category_lookup_only_on_hit(target):
     sink = ProductCategoriesSink(target, "ProductCategories", SCHEMA, [])
     calls = []
 
     def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
         calls.append((http_method, endpoint))
         if http_method == "GET":
-            return FakeResponse({"value": [{"id": 3, "code": "599iPhone"}]})
+            return FakeResponse([{"id": 3, "code": "599iPhone"}])
         return FakeResponse({}, 200)
 
     sink.request_api = fake_request
@@ -138,7 +176,24 @@ def test_product_category_put_on_hit(target):
     record_id, success, state = sink.upsert_record(record, {})
     assert success
     assert record_id == 3
-    assert calls[1][0] == "PUT"
+    assert calls == [("GET", "/product_groups")]
+    assert not state.get("is_skipped")
+
+
+def test_product_category_skips_create_when_missing(target):
+    sink = ProductCategoriesSink(target, "ProductCategories", SCHEMA, [])
+    calls = []
+
+    def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
+        calls.append(http_method)
+        return FakeResponse([])
+
+    sink.request_api = fake_request
+    record_id, success, state = sink.upsert_record({"code": "599iPhone"}, {})
+    assert success
+    assert record_id is None
+    assert state.get("is_skipped")
+    assert calls == ["GET"]
 
 
 def test_invoice_posts_without_get_by_id(target):
@@ -187,6 +242,7 @@ def test_invoice_posts_without_get_by_id(target):
     )
     assert record["customer_id"] == 21
     assert record["document_goods_value"] == 35.7
+    assert "tax_analysis_items" not in record
     record_id, success, _ = sink.upsert_record(record, {})
     assert success
     assert record_id == 1327
@@ -196,3 +252,5 @@ def test_invoice_posts_without_get_by_id(target):
         c[0] == "GET" and c[1] and "/sales_invoices/" in str(c[1]) for c in calls
     )
     assert any(c[0] == "POST" for c in calls)
+    posted = next(c[3] for c in calls if c[0] == "POST")
+    assert "tax_analysis_items" not in (posted or {})
