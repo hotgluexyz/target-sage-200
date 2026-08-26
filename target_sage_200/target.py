@@ -44,6 +44,14 @@ class TargetSage200(TargetHotglue):
             th.IntegerType,
             description="Warehouse id for product warehouse_holdings; defaults to first sales warehouse",
         ),
+        th.Property(
+            "allow_sop_pricing",
+            th.BooleanType,
+            description=(
+                "When true, send selling_unit_price and unit_discount_percent on SOP "
+                "order lines. Off by default because many API users lack permission."
+            ),
+        ),
     ).to_dict()
 
 

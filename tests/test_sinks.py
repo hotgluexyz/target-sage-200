@@ -3,10 +3,12 @@ import pytest
 from tests.test_core import SAMPLE_CONFIG
 from target_sage_200.client import Sage200Sink, odata_string_literal
 from target_sage_200.sinks import (
+    CreditNotesSink,
     CustomersSink,
     InvoicesSink,
     ProductCategoriesSink,
     ProductsSink,
+    SalesOrdersSink,
 )
 from target_sage_200.target import TargetSage200
 
@@ -254,3 +256,124 @@ def test_invoice_posts_without_get_by_id(target):
     assert any(c[0] == "POST" for c in calls)
     posted = next(c[3] for c in calls if c[0] == "POST")
     assert "tax_analysis_items" not in (posted or {})
+
+
+def test_credit_note_posts_positive_goods_value(target):
+    sink = CreditNotesSink(target, "CreditNotes", SCHEMA, [])
+    calls = []
+
+    def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
+        calls.append((http_method, endpoint, params, request_data))
+        if http_method == "GET" and endpoint == "/customers":
+            return FakeResponse({"value": [{"id": 21, "reference": "599Fresh"}]})
+        if http_method == "GET" and endpoint == "/tax_codes":
+            return FakeResponse({"value": [{"id": 99, "code": 0}]})
+        if http_method == "POST":
+            return FakeResponse({"urn": 27023}, 201)
+        return FakeResponse({"value": []})
+
+    sink.request_api = fake_request
+    record = sink.preprocess_record(
+        {
+            "order_number": "599ONum",
+            "ref": "P0599",
+            "invoice_date": "2024-10-01",
+            "customer_reference": "599Fresh",
+            "lines": [
+                {
+                    "product_code": "599IphoneX",
+                    "quantity": 1.0,
+                    "unit_price": 699.99,
+                    "tax": 0.0,
+                    "tax_code": "0",
+                    "discount_percent": 10.0,
+                    "discounted_line_total": -17.85,
+                },
+                {
+                    "product_code": "599IphoneSE",
+                    "quantity": 2.0,
+                    "unit_price": 599.99,
+                    "tax": 0.0,
+                    "tax_code": "0",
+                    "discount_percent": 10.0,
+                    "discounted_line_total": -17.85,
+                },
+            ],
+        },
+        {},
+    )
+    assert record["document_goods_value"] == 35.7
+    record_id, success, _ = sink.upsert_record(record, {})
+    assert success
+    assert record_id == 27023
+    assert sink.endpoint == "/sales_credit_notes"
+    assert any(c[0] == "POST" for c in calls)
+
+
+def test_sales_order_omits_pricing_by_default(target):
+    sink = SalesOrdersSink(target, "SalesOrders", SCHEMA, [])
+
+    def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
+        if http_method == "GET" and endpoint == "/customers":
+            return FakeResponse([{"id": 21, "reference": "599Fresh"}])
+        if http_method == "GET" and endpoint == "/products":
+            return FakeResponse([{"id": 55, "code": "599IphoneX"}])
+        if http_method == "GET" and endpoint == "/tax_codes":
+            return FakeResponse([{"id": 99, "code": 0}])
+        return FakeResponse([])
+
+    sink.request_api = fake_request
+    record = sink.preprocess_record(
+        {
+            "order_number": "599ONum",
+            "ref": "P0599",
+            "invoice_date": "2024-10-01",
+            "customer_reference": "599Fresh",
+            "lines": [{
+                "product_code": "599IphoneX",
+                "quantity": 1.0,
+                "unit_price": 699.99,
+                "tax_code": "0",
+                "discount_percent": 10.0,
+            }],
+        },
+        {},
+    )
+    line = record["lines"][0]
+    assert "selling_unit_price" not in line
+    assert "unit_discount_percent" not in line
+
+
+def test_sales_order_includes_pricing_when_allowed(target):
+    target._config["allow_sop_pricing"] = True
+    sink = SalesOrdersSink(target, "SalesOrders", SCHEMA, [])
+
+    def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
+        if http_method == "GET" and endpoint == "/customers":
+            return FakeResponse([{"id": 21, "reference": "599Fresh"}])
+        if http_method == "GET" and endpoint == "/products":
+            return FakeResponse([{"id": 55, "code": "599IphoneX"}])
+        if http_method == "GET" and endpoint == "/tax_codes":
+            return FakeResponse([{"id": 99, "code": 0}])
+        return FakeResponse([])
+
+    sink.request_api = fake_request
+    record = sink.preprocess_record(
+        {
+            "order_number": "599ONum",
+            "ref": "P0599",
+            "invoice_date": "2024-10-01",
+            "customer_reference": "599Fresh",
+            "lines": [{
+                "product_code": "599IphoneX",
+                "quantity": 1.0,
+                "unit_price": 699.99,
+                "tax_code": "0",
+                "discount_percent": 10.0,
+            }],
+        },
+        {},
+    )
+    line = record["lines"][0]
+    assert line["selling_unit_price"] == 699.99
+    assert line["unit_discount_percent"] == 10.0

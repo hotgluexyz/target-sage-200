@@ -106,14 +106,20 @@ class SalesOrdersSink(Sage200Sink):
                 "/products",
                 f"code eq {odata_string_literal(line['product_code'])}",
             )
-            lines.append({
+            sop_line = {
                 "line_type": "EnumLineTypeStandard",
                 "product_id": product["id"],
                 "line_quantity": line.get("quantity"),
-                "selling_unit_price": line.get("unit_price"),
                 "tax_code_id": self.get_tax_code_id(line.get("tax_code")),
-                "unit_discount_percent": line.get("discount_percent"),
-            })
+            }
+            # Many Sage API users cannot set line pricing on SOP orders; omit unless
+            # explicitly enabled and the fields are present.
+            if self.config.get("allow_sop_pricing"):
+                if line.get("unit_price") is not None:
+                    sop_line["selling_unit_price"] = line.get("unit_price")
+                if line.get("discount_percent") is not None:
+                    sop_line["unit_discount_percent"] = line.get("discount_percent")
+            lines.append(sop_line)
         return self.clean_payload({
             "customer_id": customer["id"],
             "document_date": _as_datetime(record.get("invoice_date")),
@@ -136,11 +142,11 @@ class LedgerDocumentSink(Sage200Sink):
         """Prefer the discounted totals Fresho supplies, else quantity x price."""
         discounted = sum(float(line.get("discounted_line_total") or 0) for line in lines)
         if discounted:
-            return discounted
-        return sum(
+            return abs(discounted)
+        return abs(sum(
             float(line.get("quantity") or 0) * float(line.get("unit_price") or 0)
             for line in lines
-        )
+        ))
 
     def preprocess_record(self, record, context):
         lines = record.get("lines") or []
@@ -178,4 +184,4 @@ class InvoicesSink(LedgerDocumentSink):
 
 class CreditNotesSink(LedgerDocumentSink):
     name = "CreditNotes"
-    endpoint = "/sales_credits"
+    endpoint = "/sales_credit_notes"

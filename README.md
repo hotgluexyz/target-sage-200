@@ -78,7 +78,7 @@ Documents behave differently from the master data:
 
 - **Sales orders** (`/sop_orders`) post real product lines, each resolved to a
   `product_id`.
-- **Invoices and credit notes** (`/sales_invoices`, `/sales_credits`) share
+- **Invoices and credit notes** (`/sales_invoices`, `/sales_credit_notes`) share
   `LedgerDocumentSink`. The sales ledger takes a financial summary rather than
   lines, so the ETL's lines are summed into a goods and tax total, with optional
   tax and nominal analysis rows. These are post-only: a posted ledger document
