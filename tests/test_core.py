@@ -19,6 +19,20 @@ def test_coerce_int_config_string_company_id():
     assert config["warehouse_id"] == 10
 
 
+def test_coerce_int_config_blank_warehouse_id():
+    config = {**SAMPLE_CONFIG, "warehouse_id": ""}
+    _coerce_int_config(config)
+    assert config["warehouse_id"] is None
+
+
+def test_target_accepts_blank_warehouse_id():
+    target = TargetSage200(
+        config={**SAMPLE_CONFIG, "warehouse_id": ""},
+        validate_config=True,
+    )
+    assert target.config["warehouse_id"] is None
+
+
 def test_target_accepts_string_company_id():
     target = TargetSage200(config={**SAMPLE_CONFIG, "company_id": "2"}, validate_config=True)
     assert target.config["company_id"] == 2

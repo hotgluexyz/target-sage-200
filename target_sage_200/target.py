@@ -18,7 +18,11 @@ def _coerce_int_config(config: dict) -> None:
     """In-place: coerce stringy integer config values before JSON Schema validation."""
     for key in _INTEGER_CONFIG_KEYS:
         value = config.get(key)
-        if isinstance(value, str) and value.strip() != "":
+        if not isinstance(value, str):
+            continue
+        if value.strip() == "":
+            config[key] = None
+        else:
             config[key] = int(value)
 
 
