@@ -10,6 +10,17 @@ from target_sage_200.sinks import (
     SalesOrdersSink,
 )
 
+# Hotglue connect UI often stores typed number fields as strings.
+_INTEGER_CONFIG_KEYS = ("company_id", "warehouse_id")
+
+
+def _coerce_int_config(config: dict) -> None:
+    """In-place: coerce stringy integer config values before JSON Schema validation."""
+    for key in _INTEGER_CONFIG_KEYS:
+        value = config.get(key)
+        if isinstance(value, str) and value.strip() != "":
+            config[key] = int(value)
+
 
 class TargetSage200(TargetHotglue):
     name = "target-sage-200"
@@ -53,6 +64,13 @@ class TargetSage200(TargetHotglue):
             ),
         ),
     ).to_dict()
+
+    def _validate_config(self, raise_errors=True, warnings_as_errors=False):
+        _coerce_int_config(self._config)
+        return super()._validate_config(
+            raise_errors=raise_errors,
+            warnings_as_errors=warnings_as_errors,
+        )
 
 
 if __name__ == "__main__":
