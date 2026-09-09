@@ -51,7 +51,9 @@ class TargetSage200(TargetHotglue):
             th.StringType,
             description=(
                 "Existing Sage product group code used when the ETL group cannot "
-                "be created (product_groups POST is unavailable on some sites)"
+                "be created (product_groups POST is unavailable on some sites). "
+                "Product type (Stock / Service / Miscellaneous) is inherited from "
+                "this group — use a Misc or Service group for non-stock items."
             ),
         ),
         th.Property(
