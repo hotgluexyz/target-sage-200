@@ -67,6 +67,16 @@ class TargetSage200(TargetHotglue):
                 "order lines. Off by default because many API users lack permission."
             ),
         ),
+        th.Property(
+            "import_as_sales_orders",
+            th.BooleanType,
+            description=(
+                "Connect UI option. When true, the ETL emits SalesOrders (with product "
+                "lines) instead of Invoices. Sales ledger invoices are financial "
+                "postings only — Sage has no API for SOP invoices with line items. "
+                "Credit notes are unaffected."
+            ),
+        ),
     ).to_dict()
 
     def _validate_config(self, raise_errors=True, warnings_as_errors=False):
