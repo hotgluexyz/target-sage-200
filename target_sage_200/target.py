@@ -70,6 +70,17 @@ class TargetSage200(TargetHotglue):
             ),
         ),
         th.Property(
+            "update_existing_records",
+            th.BooleanType,
+            description=(
+                "When true, customers and products that already exist in Sage have "
+                "their scalar fields refreshed from the source feed. Off by default "
+                "so details maintained in Sage (customer name, VAT number, payment "
+                "terms) are not overwritten; matched records are left untouched and "
+                "only new ones are created."
+            ),
+        ),
+        th.Property(
             "import_as_sales_orders",
             th.BooleanType,
             description=(

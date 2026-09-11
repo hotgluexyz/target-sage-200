@@ -30,7 +30,9 @@ class FakeResponse:
 def target():
     Sage200Sink._cache = {}
     Sage200Sink._tax_codes = {}
-    return TargetSage200(config=SAMPLE_CONFIG)
+    # Copy: the target keeps the dict it is handed, so tests that tweak config
+    # would otherwise mutate SAMPLE_CONFIG for every later test.
+    return TargetSage200(config=dict(SAMPLE_CONFIG))
 
 
 def test_odata_string_literal():
@@ -79,7 +81,29 @@ def test_customer_lookup_miss_posts(target):
     assert calls[1][1] == "/customers"
 
 
-def test_customer_lookup_hit_puts(target):
+def test_customer_lookup_hit_leaves_sage_record_alone(target):
+    """Default is create-only: a name maintained in Sage must survive the sync."""
+    sink = CustomersSink(target, "Customers", SCHEMA, [])
+    calls = []
+
+    def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
+        calls.append((http_method, endpoint, params, request_data))
+        if http_method == "GET":
+            return FakeResponse({"value": [{"id": 7, "reference": "599Fresh"}]})
+        return FakeResponse({}, 200)
+
+    sink.request_api = fake_request
+    record = {"reference": "599Fresh", "name": "599 Freshodemo"}
+    record_id, success, state = sink.upsert_record(record, {})
+    assert success
+    assert record_id == 7
+    assert state.get("existing")
+    assert not state.get("is_updated")
+    assert [c[0] for c in calls] == ["GET"]
+
+
+def test_customer_lookup_hit_puts_when_updates_enabled(target):
+    target._config["update_existing_records"] = True
     sink = CustomersSink(target, "Customers", SCHEMA, [])
     calls = []
 
@@ -98,6 +122,26 @@ def test_customer_lookup_hit_puts(target):
     assert calls[0][0] == "GET"
     assert calls[1][0] == "PUT"
     assert calls[1][1] == "/customers/7"
+    assert calls[1][3] == {"name": "599 Freshodemo"}
+
+
+def test_product_lookup_hit_leaves_sage_record_alone(target):
+    sink = ProductsSink(target, "Products", SCHEMA, [])
+    calls = []
+
+    def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
+        calls.append((http_method, endpoint, params, request_data))
+        if http_method == "GET":
+            return FakeResponse({"value": [{"id": 55, "code": "599IphoneX"}]})
+        return FakeResponse({}, 200)
+
+    sink.request_api = fake_request
+    record = {"code": "599IphoneX", "name": "599 IPhone X"}
+    record_id, success, state = sink.upsert_record(record, {})
+    assert success
+    assert record_id == 55
+    assert state.get("existing")
+    assert [c[0] for c in calls] == ["GET"]
 
 
 def test_product_lookup_miss_posts(target):

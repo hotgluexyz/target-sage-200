@@ -165,24 +165,35 @@ class Sage200Sink(HotglueSink):
             f"code eq {odata_string_literal(default)}",
         )
 
-    def upsert_by_field(self, record, field):
-        """Create the record, or update it in place if the field already matches one.
+    @staticmethod
+    def scalar_update_payload(record, field):
+        """Drop the natural key and any nested collections from an update body.
 
-        Sage has no upsert endpoint, so this searches on the natural key first. The
-        key itself is stripped from the PUT body because Sage treats references and
-        codes as immutable once assigned.
+        Sage treats references and codes as immutable once assigned, and nested
+        collections (contacts, warehouse_holdings, etc.) need their own ids on PUT,
+        so updates only refresh scalar fields.
+        """
+        return {
+            k: v
+            for k, v in record.items()
+            if k != field and not isinstance(v, (list, dict))
+        }
+
+    def upsert_by_field(self, record, field):
+        """Create the record, or update it if the field already matches one.
+
+        Sage has no upsert endpoint, so this searches on the natural key first. A
+        match is left untouched unless ``update_existing_records`` is set: records
+        curated in Sage should win over the source feed, which only ever seeds new
+        ones.
         """
         filter_expr = f"{field} eq {odata_string_literal(record[field])}"
         existing = self.lookup(self.endpoint, filter_expr)
         if existing:
             record_id = existing["id"]
-            # Nested collections (contacts, warehouse_holdings, etc.) need their own
-            # ids on PUT; strip them so updates only refresh scalar fields.
-            payload = {
-                k: v
-                for k, v in record.items()
-                if k != field and not isinstance(v, (list, dict))
-            }
+            if not self.config.get("update_existing_records"):
+                return record_id, True, {"existing": True}
+            payload = self.scalar_update_payload(record, field)
             self.request_api("PUT", endpoint=f"{self.endpoint}/{record_id}", request_data=payload)
             return record_id, True, {"is_updated": True}
         resp = self.request_api("POST", endpoint=self.endpoint, request_data=record)
