@@ -91,9 +91,14 @@ class CustomersSink(Sage200Sink):
         return self.upsert_by_field(record, "reference")
 
 
-class SalesOrdersSink(Sage200Sink):
-    name = "SalesOrders"
-    endpoint = "/sop_orders"
+class SopDocumentSink(Sage200Sink):
+    """Shared mapping for the SOP documents (sales orders and sales returns).
+
+    Both endpoints take an identical body of real product lines, each resolved to
+    a Sage ``product_id``. Direction lives in the document type rather than the
+    sign of the quantities, so a return posts the same positive figures as an
+    order and only the endpoint differs.
+    """
 
     def preprocess_record(self, record, context):
         customer = self.lookup(
@@ -131,6 +136,16 @@ class SalesOrdersSink(Sage200Sink):
             "analysis_code_2": record.get("ref"),
             "lines": lines,
         })
+
+
+class SalesOrdersSink(SopDocumentSink):
+    name = "SalesOrders"
+    endpoint = "/sop_orders"
+
+
+class SalesReturnsSink(SopDocumentSink):
+    name = "SalesReturns"
+    endpoint = "/sop_returns"
 
 
 class LedgerDocumentSink(Sage200Sink):

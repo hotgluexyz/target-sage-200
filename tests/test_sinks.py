@@ -9,6 +9,7 @@ from target_sage_200.sinks import (
     ProductCategoriesSink,
     ProductsSink,
     SalesOrdersSink,
+    SalesReturnsSink,
 )
 from target_sage_200.target import TargetSage200
 
@@ -424,3 +425,47 @@ def test_sales_order_includes_pricing_when_allowed(target):
     line = record["lines"][0]
     assert line["selling_unit_price"] == 699.99
     assert line["unit_discount_percent"] == 10.0
+
+
+def test_sales_return_posts_positive_lines_to_sop_returns(target):
+    sink = SalesReturnsSink(target, "SalesReturns", SCHEMA, [])
+    calls = []
+
+    def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
+        calls.append((http_method, endpoint, params, request_data))
+        if http_method == "GET" and endpoint == "/customers":
+            return FakeResponse([{"id": 21, "reference": "599Fresh"}])
+        if http_method == "GET" and endpoint == "/products":
+            return FakeResponse([{"id": 55, "code": "599IphoneX"}])
+        if http_method == "GET" and endpoint == "/tax_codes":
+            return FakeResponse([{"id": 99, "code": 0}])
+        return FakeResponse([])
+
+    sink.request_api = fake_request
+    record = sink.preprocess_record(
+        {
+            "order_number": "599ONum",
+            "ref": "P0599",
+            "invoice_date": "2024-10-01",
+            "customer_reference": "599Fresh",
+            "lines": [{
+                "product_code": "599IphoneX",
+                "quantity": 1.0,
+                "unit_price": 699.99,
+                "tax_code": "0",
+            }],
+        },
+        {},
+    )
+    assert sink.endpoint == "/sop_returns"
+    assert record["customer_id"] == 21
+    assert record["document_date"] == "2024-10-01T00:00:00Z"
+    line = record["lines"][0]
+    assert line["product_id"] == 55
+    assert line["line_quantity"] == 1.0
+    assert line["line_type"] == "EnumLineTypeStandard"
+
+
+def test_sales_return_is_registered_on_target():
+    assert SalesReturnsSink in TargetSage200.SINK_TYPES
+    assert "import_credits_as_sales_returns" in TargetSage200.config_jsonschema["properties"]

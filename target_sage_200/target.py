@@ -8,6 +8,7 @@ from target_sage_200.sinks import (
     ProductCategoriesSink,
     ProductsSink,
     SalesOrdersSink,
+    SalesReturnsSink,
 )
 
 # Hotglue connect UI often stores typed number fields as strings.
@@ -34,6 +35,7 @@ class TargetSage200(TargetHotglue):
         ProductsSink,
         CustomersSink,
         SalesOrdersSink,
+        SalesReturnsSink,
         InvoicesSink,
         CreditNotesSink,
     ]
@@ -87,7 +89,19 @@ class TargetSage200(TargetHotglue):
                 "Connect UI option. When true, the ETL emits SalesOrders (with product "
                 "lines) instead of Invoices. Sales ledger invoices are financial "
                 "postings only — Sage has no API for SOP invoices with line items. "
-                "Credit notes are unaffected."
+                "Credit notes are controlled separately by "
+                "import_credits_as_sales_returns."
+            ),
+        ),
+        th.Property(
+            "import_credits_as_sales_returns",
+            th.BooleanType,
+            description=(
+                "Connect UI option, independent of import_as_sales_orders. When true, "
+                "the ETL emits SalesReturns (SOP returns, with product lines) instead "
+                "of CreditNotes. A SOP return does not credit the customer account "
+                "until it is processed in Sage, whereas a sales ledger credit note "
+                "posts immediately."
             ),
         ),
     ).to_dict()
