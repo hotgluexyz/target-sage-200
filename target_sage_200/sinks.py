@@ -120,11 +120,15 @@ class SalesOrdersSink(Sage200Sink):
                 if line.get("discount_percent") is not None:
                     sop_line["unit_discount_percent"] = line.get("discount_percent")
             lines.append(sop_line)
+        # Analysis codes are positional (analysis_code_1, _2, …). Label them in Sage
+        # as "F number" and "PO number" (Maintain Analysis Codes, free text) so the
+        # UI matches. Values are Fresho order_number and ref.
         return self.clean_payload({
             "customer_id": customer["id"],
             "document_date": _as_datetime(record.get("invoice_date")),
             "customer_document_no": record.get("ref"),
             "analysis_code_1": record.get("order_number"),
+            "analysis_code_2": record.get("ref"),
             "lines": lines,
         })
 

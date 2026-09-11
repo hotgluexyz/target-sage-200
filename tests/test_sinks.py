@@ -342,6 +342,9 @@ def test_sales_order_omits_pricing_by_default(target):
     line = record["lines"][0]
     assert "selling_unit_price" not in line
     assert "unit_discount_percent" not in line
+    assert record["analysis_code_1"] == "599ONum"
+    assert record["analysis_code_2"] == "P0599"
+    assert record["customer_document_no"] == "P0599"
 
 
 def test_sales_order_includes_pricing_when_allowed(target):
