@@ -18,6 +18,10 @@ def odata_string_literal(value):
     return "'" + str(value).replace("'", "''") + "'"
 
 
+class RecordMappingError(Exception):
+    """A record cannot be mapped onto Sage, naming the record and field at fault."""
+
+
 def response_records(payload):
     """Normalize Sage list payloads to a list of records.
 
@@ -39,6 +43,8 @@ def response_records(payload):
 
 class Sage200Sink(HotglueSink):
     unified_schema = None
+    # Fields that identify a record in error messages, most identifying first.
+    identity_fields = ()
     # Caches are class level on purpose: every sink resolves the same customers,
     # products and tax codes, so sharing them keeps one lookup per entity per run.
     _cache = {}
@@ -106,6 +112,46 @@ class Sage200Sink(HotglueSink):
             raise FatalAPIError(body)
         return None
 
+    def record_label(self, record):
+        """Name a record by whichever identity fields it carries."""
+        parts = [
+            f"{field}={record[field]!r}"
+            for field in self.identity_fields
+            if record.get(field) not in (None, "")
+        ]
+        return ", ".join(parts) or "no identifying fields"
+
+    def require(self, record, field, label=None):
+        """Return a required field, or raise naming the record and the field.
+
+        An upstream mapping leaves a field out entirely when the source does not
+        supply it, so a missing key here is a gap in the incoming data rather than a
+        bug. The message has to identify the record as well as the field, because
+        neither the stream nor the offending row survives a bare KeyError.
+        """
+        value = record.get(field)
+        if value is None or value == "":
+            raise RecordMappingError(
+                f"{self.name} {label or f'record ({self.record_label(record)})'}: "
+                f"missing required field {field!r}"
+            )
+        return value
+
+    def find_by_field(self, endpoint, field, value):
+        """Return the record whose field equals value, or None."""
+        return self.lookup(endpoint, f"{field} eq {odata_string_literal(value)}")
+
+    def require_by_field(self, endpoint, field, value, entity, hint=None):
+        """Look up a record by exact field match, raising if Sage has no match."""
+        found = self.find_by_field(endpoint, field, value)
+        if not found:
+            message = (
+                f"{entity} {value!r} does not exist in Sage: no {endpoint} record "
+                f"has {field} {value!r}"
+            )
+            raise RecordMappingError(f"{message} ({hint})" if hint else message)
+        return found
+
     def lookup(self, endpoint, filter_expr):
         """Return the first record matching an OData filter, or None.
 
@@ -151,9 +197,10 @@ class Sage200Sink(HotglueSink):
 
     def resolve_product_group(self, code):
         """Look up a product group by code, falling back to default_product_group."""
-        group = self.lookup(
-            "/product_groups",
-            f"code eq {odata_string_literal(code)}",
+        group = (
+            self.lookup("/product_groups", f"code eq {odata_string_literal(code)}")
+            if code
+            else None
         )
         if group:
             return group

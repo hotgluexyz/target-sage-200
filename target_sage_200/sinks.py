@@ -1,4 +1,4 @@
-from target_sage_200.client import Sage200Sink, odata_string_literal
+from target_sage_200.client import RecordMappingError, Sage200Sink
 
 
 def _as_datetime(value):
@@ -11,19 +11,18 @@ def _as_datetime(value):
 class ProductCategoriesSink(Sage200Sink):
     name = "ProductCategories"
     endpoint = "/product_groups"
+    identity_fields = ("code", "description")
 
     def preprocess_record(self, record, context):
+        code = self.require(record, "code")
         return self.clean_payload({
-            "code": record["code"],
-            "description": record.get("description") or record["code"],
+            "code": code,
+            "description": record.get("description") or code,
         })
 
     def upsert_record(self, record, context):
         """Look up only: this Sage build returns 404 for POST/PUT on product_groups."""
-        existing = self.lookup(
-            self.endpoint,
-            f"code eq {odata_string_literal(record['code'])}",
-        )
+        existing = self.find_by_field(self.endpoint, "code", record["code"])
         if existing:
             return existing["id"], True, {}
         self.logger.warning(
@@ -37,18 +36,27 @@ class ProductCategoriesSink(Sage200Sink):
 class ProductsSink(Sage200Sink):
     name = "Products"
     endpoint = "/products"
+    identity_fields = ("code", "name")
+
+    def require_product_group(self, record):
+        """Resolve the record's product group, explaining the config fix if it fails."""
+        code = record.get("product_group")
+        group = self.resolve_product_group(code)
+        if group:
+            return group
+        described = f"{code!r}" if code else "(field 'product_group' not set)"
+        raise RecordMappingError(
+            f"{self.name} record ({self.record_label(record)}): product group "
+            f"{described} does not exist in Sage and cannot be created through the "
+            "API; set default_product_group in the connector config to an existing "
+            "Sage product group code"
+        )
 
     def preprocess_record(self, record, context):
-        group = self.resolve_product_group(record["product_group"])
-        if not group:
-            raise Exception(
-                f"Product group {record['product_group']!r} not found; set "
-                "default_product_group in config to an existing Sage product group code"
-            )
         return self.clean_payload({
-            "code": record["code"],
-            "name": record["name"],
-            "product_group_id": group["id"],
+            "code": self.require(record, "code"),
+            "name": self.require(record, "name"),
+            "product_group_id": self.require_product_group(record)["id"],
             "tax_code_id": self.get_tax_code_id(record.get("tax_code")),
             "allow_sales_order": True,
             "warehouse_holdings": [{
@@ -66,11 +74,12 @@ class ProductsSink(Sage200Sink):
 class CustomersSink(Sage200Sink):
     name = "Customers"
     endpoint = "/customers"
+    identity_fields = ("reference", "name")
 
     def preprocess_record(self, record, context):
         payload = {
-            "reference": record["reference"],
-            "name": record["name"],
+            "reference": self.require(record, "reference"),
+            "name": self.require(record, "name"),
             "vat_number": record.get("vat_number"),
             "telephone_subscriber_number": record.get("telephone"),
             "payment_terms_days": record.get("payment_term_days"),
@@ -91,7 +100,23 @@ class CustomersSink(Sage200Sink):
         return self.upsert_by_field(record, "reference")
 
 
-class SopDocumentSink(Sage200Sink):
+class DocumentSink(Sage200Sink):
+    """Shared customer resolution for the streams that post a document."""
+
+    identity_fields = ("order_number", "ref", "customer_reference")
+
+    def require_customer(self, record):
+        return self.require_by_field(
+            "/customers",
+            "reference",
+            self.require(record, "customer_reference"),
+            "Customer",
+            hint="the Customers stream creates it earlier in the same job, so check "
+            "that stream for errors",
+        )
+
+
+class SopDocumentSink(DocumentSink):
     """Shared mapping for the SOP documents (sales orders and sales returns).
 
     Both endpoints take an identical body of real product lines, each resolved to
@@ -100,34 +125,46 @@ class SopDocumentSink(Sage200Sink):
     order and only the endpoint differs.
     """
 
+    def line_product_id(self, line, position, record):
+        """Resolve a line's product code to a Sage product_id, naming the bad line."""
+        label = f"record ({self.record_label(record)}) line {position}"
+        if line.get("description"):
+            label += f" ({line['description']!r})"
+        code = self.require(line, "product_code", label)
+        return self.require_by_field(
+            "/products",
+            "code",
+            code,
+            "Product",
+            hint="the Products stream creates it earlier in the same job, so check "
+            "that stream for errors",
+        )["id"]
+
+    def build_line(self, line, position, record):
+        sop_line = {
+            "line_type": "EnumLineTypeStandard",
+            "product_id": self.line_product_id(line, position, record),
+            "line_quantity": line.get("quantity"),
+            "tax_code_id": self.get_tax_code_id(line.get("tax_code")),
+        }
+        # Many Sage API users cannot set line pricing on SOP orders; omit unless
+        # explicitly enabled and the fields are present.
+        if self.config.get("allow_sop_pricing"):
+            if line.get("unit_price") is not None:
+                sop_line["selling_unit_price"] = line.get("unit_price")
+            if line.get("discount_percent") is not None:
+                sop_line["unit_discount_percent"] = line.get("discount_percent")
+        return sop_line
+
     def preprocess_record(self, record, context):
-        customer = self.lookup(
-            "/customers",
-            f"reference eq {odata_string_literal(record['customer_reference'])}",
-        )
-        lines = []
-        for line in record.get("lines") or []:
-            product = self.lookup(
-                "/products",
-                f"code eq {odata_string_literal(line['product_code'])}",
-            )
-            sop_line = {
-                "line_type": "EnumLineTypeStandard",
-                "product_id": product["id"],
-                "line_quantity": line.get("quantity"),
-                "tax_code_id": self.get_tax_code_id(line.get("tax_code")),
-            }
-            # Many Sage API users cannot set line pricing on SOP orders; omit unless
-            # explicitly enabled and the fields are present.
-            if self.config.get("allow_sop_pricing"):
-                if line.get("unit_price") is not None:
-                    sop_line["selling_unit_price"] = line.get("unit_price")
-                if line.get("discount_percent") is not None:
-                    sop_line["unit_discount_percent"] = line.get("discount_percent")
-            lines.append(sop_line)
+        customer = self.require_customer(record)
+        lines = [
+            self.build_line(line, position, record)
+            for position, line in enumerate(record.get("lines") or [], start=1)
+        ]
         # Analysis codes are positional (analysis_code_1, _2, …). Label them in Sage
         # as "F number" and "PO number" (Maintain Analysis Codes, free text) so the
-        # UI matches. Values are Fresho order_number and ref.
+        # UI matches. Values are the record's order_number and ref.
         return self.clean_payload({
             "customer_id": customer["id"],
             "document_date": _as_datetime(record.get("invoice_date")),
@@ -148,7 +185,7 @@ class SalesReturnsSink(SopDocumentSink):
     endpoint = "/sop_returns"
 
 
-class LedgerDocumentSink(Sage200Sink):
+class LedgerDocumentSink(DocumentSink):
     """Shared mapping for the sales ledger documents (invoices and credit notes).
 
     Unlike sales orders, the ledger endpoints post a financial summary rather than
@@ -158,7 +195,7 @@ class LedgerDocumentSink(Sage200Sink):
 
     @staticmethod
     def goods_value(lines):
-        """Prefer the discounted totals Fresho supplies, else quantity x price."""
+        """Prefer the discounted totals the source supplies, else quantity x price."""
         discounted = sum(float(line.get("discounted_line_total") or 0) for line in lines)
         if discounted:
             return abs(discounted)
@@ -171,10 +208,7 @@ class LedgerDocumentSink(Sage200Sink):
         lines = record.get("lines") or []
         goods = self.goods_value(lines)
         tax = sum(float(line.get("tax") or 0) for line in lines)
-        customer = self.lookup(
-            "/customers",
-            f"reference eq {odata_string_literal(record['customer_reference'])}",
-        )
+        customer = self.require_customer(record)
         payload = {
             "customer_id": customer["id"],
             "reference": record.get("order_number"),
