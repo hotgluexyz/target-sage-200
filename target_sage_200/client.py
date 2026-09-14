@@ -10,7 +10,10 @@ from target_hotglue.client import HotglueSink
 from target_sage_200.auth import Sage200Authenticator
 
 
-BASE_URL = "https://api.columbus.sage.com/uk/sage200extra/accounts/v1"
+# Sage publishes the two variants as separate APIs under separate roots. The
+# "extra" segment is Professional's, kept from when the product was Sage 200 Extra.
+STANDARD_BASE_URL = "https://api.columbus.sage.com/uk/sage200/accounts/v1"
+PROFESSIONAL_BASE_URL = "https://api.columbus.sage.com/uk/sage200extra/accounts/v1"
 
 
 def odata_string_literal(value):
@@ -52,7 +55,21 @@ class Sage200Sink(HotglueSink):
 
     @property
     def base_url(self):
-        return self.config.get("base_url") or BASE_URL
+        """Resolve the API root for this tenant's Sage 200 variant.
+
+        Professional is the default: it is what every tenant configured before the
+        flag existed was pointed at, so an absent or null value has to keep meaning
+        Professional rather than falling through to Standard. ``base_url`` stays
+        supported as an explicit override for regions outside the UK, whose roots
+        differ from both defaults by more than the variant segment.
+        """
+        override = self.config.get("base_url")
+        if override:
+            return override
+        is_professional = self.config.get("is_professional")
+        if is_professional is None:
+            is_professional = True
+        return PROFESSIONAL_BASE_URL if is_professional else STANDARD_BASE_URL
 
     @property
     def http_headers(self):

@@ -46,7 +46,26 @@ class TargetSage200(TargetHotglue):
         th.Property("access_token", th.StringType),
         th.Property("site_id", th.StringType, required=True),
         th.Property("company_id", th.IntegerType, required=True),
-        th.Property("base_url", th.StringType),
+        th.Property(
+            "is_professional",
+            th.BooleanType,
+            default=True,
+            description=(
+                "Connect UI option. True for Sage 200 Professional (formerly Extra), "
+                "false for Sage 200 Standard. The two variants are served by "
+                "different API roots, and calling the wrong one fails at "
+                "authorisation with no sites found rather than at request time. "
+                "Defaults to Professional."
+            ),
+        ),
+        th.Property(
+            "base_url",
+            th.StringType,
+            description=(
+                "Explicit API root, overriding is_professional. Only needed outside "
+                "the UK, where the region segment differs from both defaults."
+            ),
+        ),
         th.Property("default_nominal_code", th.StringType),
         th.Property(
             "default_product_group",
