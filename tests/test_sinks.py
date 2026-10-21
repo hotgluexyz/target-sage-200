@@ -1,7 +1,13 @@
 import pytest
 
 from tests.test_core import SAMPLE_CONFIG
-from target_sage_200.client import Sage200Sink, odata_string_literal
+from target_sage_200.client import (
+    PROFESSIONAL_BASE_URL,
+    STANDARD_BASE_URL,
+    RecordMappingError,
+    Sage200Sink,
+    odata_string_literal,
+)
 from target_sage_200.sinks import (
     CreditNotesSink,
     CustomersSink,
@@ -39,6 +45,36 @@ def target():
 def test_odata_string_literal():
     assert odata_string_literal("OSO21") == "'OSO21'"
     assert odata_string_literal("O'Brien") == "'O''Brien'"
+
+
+def base_url_for(config):
+    target = TargetSage200(config={**SAMPLE_CONFIG, **config})
+    return ProductCategoriesSink(target, "ProductCategories", SCHEMA, []).base_url
+
+
+def test_base_url_defaults_to_professional():
+    """Every tenant predating the flag was pointed at Professional."""
+    assert base_url_for({}) == PROFESSIONAL_BASE_URL
+
+
+def test_base_url_follows_is_professional():
+    assert base_url_for({"is_professional": True}) == PROFESSIONAL_BASE_URL
+    assert base_url_for({"is_professional": False}) == STANDARD_BASE_URL
+
+
+def test_base_url_treats_null_is_professional_as_professional():
+    assert base_url_for({"is_professional": None}) == PROFESSIONAL_BASE_URL
+
+
+def test_base_url_override_wins_over_the_flag():
+    override = "https://api.columbus.sage.com/ie/sage200extra/accounts/v1"
+    assert base_url_for({"base_url": override, "is_professional": False}) == override
+
+
+def test_blank_base_url_falls_back_to_the_flag():
+    """Existing connector configs carry base_url as an empty string."""
+    assert base_url_for({"base_url": ""}) == PROFESSIONAL_BASE_URL
+    assert base_url_for({"base_url": "", "is_professional": False}) == STANDARD_BASE_URL
 
 
 def test_empty_schema_timestamp_parse_skips_unknown_keys(target):
@@ -243,7 +279,7 @@ def test_product_category_skips_create_when_missing(target):
     assert calls == ["GET"]
 
 
-def test_invoice_posts_without_get_by_id(target):
+def test_invoice_lookup_miss_posts(target):
     sink = InvoicesSink(target, "Invoices", SCHEMA, [])
     calls = []
 
@@ -253,6 +289,8 @@ def test_invoice_posts_without_get_by_id(target):
             return FakeResponse({"value": [{"id": 21, "reference": "599Fresh"}]})
         if http_method == "GET" and endpoint == "/tax_codes":
             return FakeResponse({"value": [{"id": 99, "code": 0}]})
+        if http_method == "GET" and endpoint == "/sales_invoices":
+            return FakeResponse({"value": []})
         if http_method == "POST":
             return FakeResponse({"urn": 1327}, 201)
         return FakeResponse({"value": []})
@@ -293,15 +331,51 @@ def test_invoice_posts_without_get_by_id(target):
     record_id, success, _ = sink.upsert_record(record, {})
     assert success
     assert record_id == 1327
-    get_endpoints = [c[1] for c in calls if c[0] == "GET"]
-    assert "/sales_invoices" not in get_endpoints
-    assert not any(
-        c[0] == "GET" and c[1] and "/sales_invoices/" in str(c[1]) for c in calls
-    )
+    assert any(c[0] == "GET" and c[1] == "/sales_invoices" for c in calls)
     assert any(c[0] == "POST" for c in calls)
     posted = next(c[3] for c in calls if c[0] == "POST")
     assert "tax_analysis_items" not in (posted or {})
 
+
+def test_invoice_skips_post_when_snapshot_id_present(target):
+    sink = InvoicesSink(target, "Invoices", SCHEMA, [])
+    calls = []
+
+    def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
+        calls.append((http_method, endpoint))
+        return FakeResponse({"value": []})
+
+    sink.request_api = fake_request
+    record_id, success, state = sink.upsert_record(
+        {"id": 1327, "reference": "599ONum", "customer_id": 21},
+        {},
+    )
+    assert success
+    assert record_id == 1327
+    assert state.get("existing")
+    assert calls == []
+
+
+def test_invoice_skips_post_when_reference_lookup_hits(target):
+    sink = InvoicesSink(target, "Invoices", SCHEMA, [])
+    calls = []
+
+    def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
+        calls.append((http_method, endpoint, params))
+        if http_method == "GET" and endpoint == "/sales_invoices":
+            return FakeResponse({"value": [{"id": 88, "urn": 1327, "reference": "599ONum"}]})
+        return FakeResponse({"value": []})
+
+    sink.request_api = fake_request
+    record_id, success, state = sink.upsert_record(
+        {"reference": "599ONum", "customer_id": 21},
+        {},
+    )
+    assert success
+    assert record_id == 1327
+    assert state.get("existing")
+    assert [c[0] for c in calls] == ["GET"]
+    assert calls[0][1] == "/sales_invoices"
 
 def test_credit_note_posts_positive_goods_value(target):
     sink = CreditNotesSink(target, "CreditNotes", SCHEMA, [])
@@ -355,45 +429,7 @@ def test_credit_note_posts_positive_goods_value(target):
     assert any(c[0] == "POST" for c in calls)
 
 
-def test_sales_order_omits_pricing_by_default(target):
-    sink = SalesOrdersSink(target, "SalesOrders", SCHEMA, [])
-
-    def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
-        if http_method == "GET" and endpoint == "/customers":
-            return FakeResponse([{"id": 21, "reference": "599Fresh"}])
-        if http_method == "GET" and endpoint == "/products":
-            return FakeResponse([{"id": 55, "code": "599IphoneX"}])
-        if http_method == "GET" and endpoint == "/tax_codes":
-            return FakeResponse([{"id": 99, "code": 0}])
-        return FakeResponse([])
-
-    sink.request_api = fake_request
-    record = sink.preprocess_record(
-        {
-            "order_number": "599ONum",
-            "ref": "P0599",
-            "invoice_date": "2024-10-01",
-            "customer_reference": "599Fresh",
-            "lines": [{
-                "product_code": "599IphoneX",
-                "quantity": 1.0,
-                "unit_price": 699.99,
-                "tax_code": "0",
-                "discount_percent": 10.0,
-            }],
-        },
-        {},
-    )
-    line = record["lines"][0]
-    assert "selling_unit_price" not in line
-    assert "unit_discount_percent" not in line
-    assert record["analysis_code_1"] == "599ONum"
-    assert record["analysis_code_2"] == "P0599"
-    assert record["customer_document_no"] == "P0599"
-
-
-def test_sales_order_includes_pricing_when_allowed(target):
-    target._config["allow_sop_pricing"] = True
+def test_sales_order_includes_pricing(target):
     sink = SalesOrdersSink(target, "SalesOrders", SCHEMA, [])
 
     def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
@@ -425,6 +461,90 @@ def test_sales_order_includes_pricing_when_allowed(target):
     line = record["lines"][0]
     assert line["selling_unit_price"] == 699.99
     assert line["unit_discount_percent"] == 10.0
+    assert record["analysis_code_1"] == "599ONum"
+    assert record["analysis_code_2"] == "P0599"
+    assert record["customer_document_no"] == "P0599"
+
+
+def test_sales_order_skips_post_when_snapshot_id_present(target):
+    sink = SalesOrdersSink(target, "SalesOrders", SCHEMA, [])
+    calls = []
+
+    def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
+        calls.append((http_method, endpoint))
+        return FakeResponse({"value": []})
+
+    sink.request_api = fake_request
+    record_id, success, state = sink.upsert_record(
+        {"id": 901, "analysis_code_1": "599ONum", "customer_id": 21, "lines": []},
+        {},
+    )
+    assert success
+    assert record_id == 901
+    assert state.get("existing")
+    assert calls == []
+
+
+def test_sales_order_skips_post_when_analysis_code_lookup_hits(target):
+    sink = SalesOrdersSink(target, "SalesOrders", SCHEMA, [])
+    calls = []
+
+    def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
+        calls.append((http_method, endpoint, params, request_data))
+        if http_method == "GET" and endpoint == "/sop_orders":
+            return FakeResponse({"value": [{"id": 901, "analysis_code_1": "599ONum"}]})
+        return FakeResponse({"value": []})
+
+    sink.request_api = fake_request
+    record_id, success, state = sink.upsert_record(
+        {"analysis_code_1": "599ONum", "customer_id": 21, "lines": []},
+        {},
+    )
+    assert success
+    assert record_id == 901
+    assert state.get("existing")
+    assert [c[0] for c in calls] == ["GET"]
+    assert calls[0][1] == "/sop_orders"
+
+
+def test_sales_order_lookup_miss_posts(target):
+    sink = SalesOrdersSink(target, "SalesOrders", SCHEMA, [])
+    calls = []
+
+    def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
+        calls.append((http_method, endpoint, params, request_data))
+        if http_method == "GET" and endpoint == "/sop_orders":
+            return FakeResponse({"value": []})
+        if http_method == "POST":
+            return FakeResponse({"id": 902}, 201)
+        return FakeResponse({"value": []})
+
+    sink.request_api = fake_request
+    record_id, success, state = sink.upsert_record(
+        {"analysis_code_1": "599ONum", "customer_id": 21, "lines": []},
+        {},
+    )
+    assert success
+    assert record_id == 902
+    assert not state.get("existing")
+    assert [c[0] for c in calls] == ["GET", "POST"]
+
+
+def test_unit_selling_price_permission_error_hard_fails(target):
+    sink = SalesOrdersSink(target, "SalesOrders", SCHEMA, [])
+    sink.init_state()
+    with pytest.raises(RecordMappingError) as excinfo:
+        sink.update_state({
+            "success": False,
+            "hash": "abc",
+            "error": (
+                "The user does not have permissions to amend the Unit Selling Price"
+            ),
+        })
+    message = str(excinfo.value)
+    assert "Unit Selling Price" in message
+    assert "permission" in message.lower()
+    assert "re-run" in message
 
 
 def test_sales_return_posts_positive_lines_to_sop_returns(target):
@@ -453,6 +573,7 @@ def test_sales_return_posts_positive_lines_to_sop_returns(target):
                 "quantity": 1.0,
                 "unit_price": 699.99,
                 "tax_code": "0",
+                "discount_percent": 10.0,
             }],
         },
         {},
@@ -464,8 +585,110 @@ def test_sales_return_posts_positive_lines_to_sop_returns(target):
     assert line["product_id"] == 55
     assert line["line_quantity"] == 1.0
     assert line["line_type"] == "EnumLineTypeStandard"
+    assert line["selling_unit_price"] == 699.99
+    assert line["unit_discount_percent"] == 10.0
+
+def test_product_without_code_names_the_stream_and_record(target):
+    """A source line with no product code must not surface as KeyError: 'code'."""
+    sink = ProductsSink(target, "Products", SCHEMA, [])
+    with pytest.raises(RecordMappingError) as excinfo:
+        sink.preprocess_record({"name": "599 IPhone X", "product_group": "599iPhone"}, {})
+    message = str(excinfo.value)
+    assert "Products" in message
+    assert "'code'" in message
+    assert "599 IPhone X" in message
+
+
+def test_product_without_group_explains_the_config_fix(target):
+    sink = ProductsSink(target, "Products", SCHEMA, [])
+    sink.request_api = lambda *args, **kwargs: FakeResponse([])
+    with pytest.raises(RecordMappingError) as excinfo:
+        sink.preprocess_record({"code": "599IphoneX", "name": "599 IPhone X"}, {})
+    message = str(excinfo.value)
+    assert "code='599IphoneX'" in message
+    assert "'product_group' not set" in message
+    assert "default_product_group" in message
+
+
+def test_customer_without_reference_names_the_missing_field(target):
+    sink = CustomersSink(target, "Customers", SCHEMA, [])
+    with pytest.raises(RecordMappingError) as excinfo:
+        sink.preprocess_record({"name": "599 Freshodemo"}, {})
+    message = str(excinfo.value)
+    assert "Customers" in message
+    assert "'reference'" in message
+    assert "name='599 Freshodemo'" in message
+
+
+def test_sop_line_without_product_code_names_the_document_and_line(target):
+    sink = SalesOrdersSink(target, "SalesOrders", SCHEMA, [])
+
+    def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
+        if endpoint == "/customers":
+            return FakeResponse([{"id": 21, "reference": "599Fresh"}])
+        if endpoint == "/products":
+            return FakeResponse([{"id": 55, "code": "599IphoneX"}])
+        if endpoint == "/tax_codes":
+            return FakeResponse([{"id": 99, "code": 0}])
+        return FakeResponse([])
+
+    sink.request_api = fake_request
+    with pytest.raises(RecordMappingError) as excinfo:
+        sink.preprocess_record(
+            {
+                "order_number": "599ONum",
+                "customer_reference": "599Fresh",
+                "lines": [
+                    {"product_code": "599IphoneX", "quantity": 1.0},
+                    {"quantity": 2.0, "description": "599 IPhone SE"},
+                ],
+            },
+            {},
+        )
+    message = str(excinfo.value)
+    assert "order_number='599ONum'" in message
+    assert "line 2" in message
+    assert "599 IPhone SE" in message
+    assert "'product_code'" in message
+
+
+def test_document_with_unknown_customer_says_which_reference_is_missing(target):
+    sink = InvoicesSink(target, "Invoices", SCHEMA, [])
+    sink.request_api = lambda *args, **kwargs: FakeResponse([])
+    with pytest.raises(RecordMappingError) as excinfo:
+        sink.preprocess_record(
+            {"order_number": "599ONum", "customer_reference": "599Fresh", "lines": []},
+            {},
+        )
+    message = str(excinfo.value)
+    assert "Customer '599Fresh' does not exist in Sage" in message
+    assert "/customers" in message
+
+
+def test_sop_line_with_unknown_product_points_at_the_products_stream(target):
+    sink = SalesOrdersSink(target, "SalesOrders", SCHEMA, [])
+
+    def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
+        if endpoint == "/customers":
+            return FakeResponse([{"id": 21, "reference": "599Fresh"}])
+        return FakeResponse([])
+
+    sink.request_api = fake_request
+    with pytest.raises(RecordMappingError) as excinfo:
+        sink.preprocess_record(
+            {
+                "order_number": "599ONum",
+                "customer_reference": "599Fresh",
+                "lines": [{"product_code": "599IphoneX", "quantity": 1.0}],
+            },
+            {},
+        )
+    message = str(excinfo.value)
+    assert "Product '599IphoneX' does not exist in Sage" in message
+    assert "Products stream" in message
 
 
 def test_sales_return_is_registered_on_target():
     assert SalesReturnsSink in TargetSage200.SINK_TYPES
     assert "import_credits_as_sales_returns" in TargetSage200.config_jsonschema["properties"]
+    assert "allow_sop_pricing" not in TargetSage200.config_jsonschema["properties"]
