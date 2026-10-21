@@ -248,7 +248,9 @@ class LedgerDocumentSink(DocumentSink):
             return record["id"], True, {"existing": True}
         reference = record.get("reference")
         if reference:
-            existing = self.find_by_field(self.endpoint, "reference", reference)
+            existing = self.find_by_field(
+                "/sales_posted_transactions", "reference", reference
+            )
             if existing:
                 return existing.get("urn") or existing["id"], True, {"existing": True}
         body = self.request_api("POST", request_data=record).json()

@@ -140,11 +140,10 @@ class Sage200Sink(HotglueSink):
             error = state.get("error")
             if self.is_unit_selling_price_permission_error(error):
                 raise RecordMappingError(
-                    "Sage API user does not have permission to amend the Unit Selling"
-                    "Price on SOP lines; Go to Sales Order Processing - SOP Utilities - System Setup -"
-                    "User Permissions. Find your user on the list and select EDIT. You will see a number of check boxes,"
-                    "one of which is 'Override prices and discounts on order lines'."
-                    "Check the box and save. Then re-run the job."
+                    "Sage API user does not have permission to amend the Unit Selling "
+                    "Price on SOP lines. In Sage: Sales Order Processing → SOP Utilities → "
+                    "System Setup → User Permissions → select your user → Edit → enable "
+                    "'Override prices and discounts on order lines' → Save, then re-run."
                 )
         return super().update_state(state, is_duplicate=is_duplicate, **kwargs)
 

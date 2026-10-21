@@ -289,7 +289,7 @@ def test_invoice_lookup_miss_posts(target):
             return FakeResponse({"value": [{"id": 21, "reference": "599Fresh"}]})
         if http_method == "GET" and endpoint == "/tax_codes":
             return FakeResponse({"value": [{"id": 99, "code": 0}]})
-        if http_method == "GET" and endpoint == "/sales_invoices":
+        if http_method == "GET" and endpoint == "/sales_posted_transactions":
             return FakeResponse({"value": []})
         if http_method == "POST":
             return FakeResponse({"urn": 1327}, 201)
@@ -331,7 +331,7 @@ def test_invoice_lookup_miss_posts(target):
     record_id, success, _ = sink.upsert_record(record, {})
     assert success
     assert record_id == 1327
-    assert any(c[0] == "GET" and c[1] == "/sales_invoices" for c in calls)
+    assert any(c[0] == "GET" and c[1] == "/sales_posted_transactions" for c in calls)
     assert any(c[0] == "POST" for c in calls)
     posted = next(c[3] for c in calls if c[0] == "POST")
     assert "tax_analysis_items" not in (posted or {})
@@ -362,7 +362,7 @@ def test_invoice_skips_post_when_reference_lookup_hits(target):
 
     def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
         calls.append((http_method, endpoint, params))
-        if http_method == "GET" and endpoint == "/sales_invoices":
+        if http_method == "GET" and endpoint == "/sales_posted_transactions":
             return FakeResponse({"value": [{"id": 88, "urn": 1327, "reference": "599ONum"}]})
         return FakeResponse({"value": []})
 
@@ -375,7 +375,7 @@ def test_invoice_skips_post_when_reference_lookup_hits(target):
     assert record_id == 1327
     assert state.get("existing")
     assert [c[0] for c in calls] == ["GET"]
-    assert calls[0][1] == "/sales_invoices"
+    assert calls[0][1] == "/sales_posted_transactions"
 
 def test_credit_note_posts_positive_goods_value(target):
     sink = CreditNotesSink(target, "CreditNotes", SCHEMA, [])
