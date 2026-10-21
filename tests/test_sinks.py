@@ -530,21 +530,19 @@ def test_sales_order_lookup_miss_posts(target):
     assert [c[0] for c in calls] == ["GET", "POST"]
 
 
-def test_unit_selling_price_permission_error_hard_fails(target):
+def test_unit_selling_price_permission_error_rewrites_message(target):
     sink = SalesOrdersSink(target, "SalesOrders", SCHEMA, [])
     sink.init_state()
-    with pytest.raises(RecordMappingError) as excinfo:
-        sink.update_state({
-            "success": False,
-            "hash": "abc",
-            "error": (
-                "The user does not have permissions to amend the Unit Selling Price"
-            ),
-        })
-    message = str(excinfo.value)
-    assert "Unit Selling Price" in message
-    assert "permission" in message.lower()
-    assert "re-run" in message
+    sink.update_state({
+        "success": False,
+        "hash": "abc",
+        "error": (
+            "The user does not have permissions to amend the Unit Selling Price"
+        ),
+    })
+    bookmark = sink.latest_state["bookmarks"]["SalesOrders"][-1]
+    assert bookmark["error"] == Sage200Sink.UNIT_SELLING_PRICE_PERMISSION_MESSAGE
+    assert sink.latest_state["summary"]["SalesOrders"]["fail"] == 1
 
 
 def test_sales_return_posts_positive_lines_to_sop_returns(target):
