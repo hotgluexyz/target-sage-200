@@ -129,11 +129,11 @@ Sage product group whose type is Miscellaneous or Service/Labour.
 | `access_token` | no | Refreshed automatically when missing or near expiry |
 | `site_id` | yes | Sent as the `X-Site` header |
 | `company_id` | yes | Sent as the `X-Company` header |
-| `base_url` | no | Defaults to the UK Sage 200 Extra endpoint |
+| `is_professional` | no (`true`) | Connect UI option. `true` for Sage 200 Professional (formerly Extra), `false` for Sage 200 Standard. The variants are served by different API roots, and picking the wrong one surfaces as "no sites found" at authorisation. |
+| `base_url` | no | Explicit API root, overriding `is_professional`. Only needed outside the UK, where the region segment differs from both defaults. |
 | `default_nominal_code` | no | When set, adds a nominal analysis row to ledger documents |
 | `import_as_sales_orders` | no (`false`) | Connect UI option. When true, ETL emits `SalesOrders` (line items) instead of `Invoices`. Credit notes are controlled separately. |
 | `import_credits_as_sales_returns` | no (`false`) | Connect UI option, independent of the above. When true, ETL emits `SalesReturns` (SOP returns, line items) instead of `CreditNotes`. A SOP return does not credit the customer account until processed in Sage. |
-| `allow_sop_pricing` | no | When true, send unit price/discount on SOP order lines |
 | `update_existing_records` | no (`false`) | When true, refresh scalar fields on customers/products that already exist in Sage. Off by default so Sage-side values are not overwritten; matched records are skipped and only new ones created. |
 | `default_product_group` | no | Fallback product group when Fresho sends an empty group. Product type (stock vs non-stock) is inherited from this group's Sage type. |
 

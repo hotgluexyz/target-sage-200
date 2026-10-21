@@ -147,13 +147,10 @@ class SopDocumentSink(DocumentSink):
             "line_quantity": line.get("quantity"),
             "tax_code_id": self.get_tax_code_id(line.get("tax_code")),
         }
-        # Many Sage API users cannot set line pricing on SOP orders; omit unless
-        # explicitly enabled and the fields are present.
-        if self.config.get("allow_sop_pricing"):
-            if line.get("unit_price") is not None:
-                sop_line["selling_unit_price"] = line.get("unit_price")
-            if line.get("discount_percent") is not None:
-                sop_line["unit_discount_percent"] = line.get("discount_percent")
+        if line.get("unit_price") is not None:
+            sop_line["selling_unit_price"] = line.get("unit_price")
+        if line.get("discount_percent") is not None:
+            sop_line["unit_discount_percent"] = line.get("discount_percent")
         return sop_line
 
     def preprocess_record(self, record, context):
@@ -165,7 +162,7 @@ class SopDocumentSink(DocumentSink):
         # Analysis codes are positional (analysis_code_1, _2, …). Label them in Sage
         # as "F number" and "PO number" (Maintain Analysis Codes, free text) so the
         # UI matches. Values are the record's order_number and ref.
-        return self.clean_payload({
+        payload = self.clean_payload({
             "customer_id": customer["id"],
             "document_date": _as_datetime(record.get("invoice_date")),
             "customer_document_no": record.get("ref"),
@@ -173,6 +170,24 @@ class SopDocumentSink(DocumentSink):
             "analysis_code_2": record.get("ref"),
             "lines": lines,
         })
+        if record.get("id") is not None:
+            payload["id"] = record["id"]
+        return payload
+
+    def upsert_record(self, record, context):
+        """Skip create when a snapshot id or matching analysis_code_1 already exists."""
+        if record.get("id") is not None:
+            return record["id"], True, {"existing": True}
+        analysis_code_1 = record.get("analysis_code_1")
+        if analysis_code_1:
+            existing = self.find_by_field(
+                self.endpoint, "analysis_code_1", analysis_code_1
+            )
+            if existing:
+                return existing["id"], True, {"existing": True}
+        response = self.request_api("POST", request_data=record)
+        body = response.json()
+        return body.get("id"), response.ok, {}
 
 
 class SalesOrdersSink(SopDocumentSink):
@@ -222,10 +237,20 @@ class LedgerDocumentSink(DocumentSink):
         nominal = self.config.get("default_nominal_code")
         if nominal:
             payload["nominal_analysis_items"] = [{"code": nominal, "goods_value": goods}]
-        return self.clean_payload(payload)
+        payload = self.clean_payload(payload)
+        if record.get("id") is not None:
+            payload["id"] = record["id"]
+        return payload
 
     def upsert_record(self, record, context):
-        """Post only: posted ledger documents cannot be looked up and amended."""
+        """Skip create when a snapshot id or matching reference already exists."""
+        if record.get("id") is not None:
+            return record["id"], True, {"existing": True}
+        reference = record.get("reference")
+        if reference:
+            existing = self.find_by_field(self.endpoint, "reference", reference)
+            if existing:
+                return existing.get("urn") or existing["id"], True, {"existing": True}
         body = self.request_api("POST", request_data=record).json()
         return body.get("urn") or body.get("id"), True, {}
 

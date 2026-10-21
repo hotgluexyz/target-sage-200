@@ -129,6 +129,25 @@ class Sage200Sink(HotglueSink):
             raise FatalAPIError(body)
         return None
 
+    @staticmethod
+    def is_unit_selling_price_permission_error(error):
+        text = str(error or "")
+        return "Unit Selling Price" in text and "permission" in text.lower()
+
+    def update_state(self, state: dict, is_duplicate=False, **kwargs):
+        """Hard-fail SOP Unit Selling Price permission errors so the job does not go green."""
+        if not is_duplicate and not state.get("success", False):
+            error = state.get("error")
+            if self.is_unit_selling_price_permission_error(error):
+                raise RecordMappingError(
+                    "Sage API user does not have permission to amend the Unit Selling"
+                    "Price on SOP lines; Go to Sales Order Processing - SOP Utilities - System Setup -"
+                    "User Permissions. Find your user on the list and select EDIT. You will see a number of check boxes,"
+                    "one of which is 'Override prices and discounts on order lines'."
+                    "Check the box and save. Then re-run the job."
+                )
+        return super().update_state(state, is_duplicate=is_duplicate, **kwargs)
+
     def record_label(self, record):
         """Name a record by whichever identity fields it carries."""
         parts = [
