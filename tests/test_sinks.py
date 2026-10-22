@@ -356,7 +356,7 @@ def test_invoice_skips_post_when_snapshot_id_present(target):
     assert calls == []
 
 
-def test_invoice_skips_post_when_reference_lookup_hits(target):
+def test_invoice_skips_post_when_posted_transaction_matches(target):
     sink = InvoicesSink(target, "Invoices", SCHEMA, [])
     calls = []
 
@@ -376,6 +376,56 @@ def test_invoice_skips_post_when_reference_lookup_hits(target):
     assert state.get("existing")
     assert [c[0] for c in calls] == ["GET"]
     assert calls[0][1] == "/sales_posted_transactions"
+    filter_expr = calls[0][2]["$filter"]
+    assert "reference eq '599ONum'" in filter_expr
+    assert "customer_id eq 21" in filter_expr
+    assert "trader_transaction_type eq 'TradingAccountEntryTypeInvoice'" in filter_expr
+
+
+def test_invoice_posts_when_posted_transaction_lookup_misses(target):
+    sink = InvoicesSink(target, "Invoices", SCHEMA, [])
+    calls = []
+
+    def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
+        calls.append((http_method, endpoint, params, request_data))
+        if http_method == "GET" and endpoint == "/sales_posted_transactions":
+            return FakeResponse({"value": []})
+        if http_method == "POST":
+            return FakeResponse({"urn": 1328}, 201)
+        return FakeResponse({"value": []})
+
+    sink.request_api = fake_request
+    record_id, success, state = sink.upsert_record(
+        {"reference": "599ONum", "customer_id": 21},
+        {},
+    )
+    assert success
+    assert record_id == 1328
+    assert not state.get("existing")
+    assert any(c[0] == "POST" for c in calls)
+
+
+def test_credit_note_lookup_uses_credit_note_transaction_type(target):
+    sink = CreditNotesSink(target, "CreditNotes", SCHEMA, [])
+    calls = []
+
+    def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
+        calls.append((http_method, endpoint, params))
+        if http_method == "GET" and endpoint == "/sales_posted_transactions":
+            return FakeResponse({"value": [{"id": 99, "urn": 27023, "reference": "599ONum"}]})
+        return FakeResponse({"value": []})
+
+    sink.request_api = fake_request
+    record_id, success, state = sink.upsert_record(
+        {"reference": "599ONum", "customer_id": 21},
+        {},
+    )
+    assert success
+    assert record_id == 27023
+    assert state.get("existing")
+    filter_expr = calls[0][2]["$filter"]
+    assert "customer_id eq 21" in filter_expr
+    assert "trader_transaction_type eq 'TradingAccountEntryTypeCreditNote'" in filter_expr
 
 def test_credit_note_posts_positive_goods_value(target):
     sink = CreditNotesSink(target, "CreditNotes", SCHEMA, [])

@@ -1,4 +1,4 @@
-from target_sage_200.client import RecordMappingError, Sage200Sink
+from target_sage_200.client import RecordMappingError, Sage200Sink, odata_string_literal
 
 
 def _as_datetime(value):
@@ -208,6 +208,10 @@ class LedgerDocumentSink(DocumentSink):
     total plus optional tax/nominal analysis rows.
     """
 
+    # Value of sales_posted_transactions.trader_transaction_type for this sink's
+    # POST endpoint (/sales_invoices vs /sales_credit_notes).
+    posted_transaction_type = None
+
     @staticmethod
     def goods_value(lines):
         """Prefer the discounted totals the source supplies, else quantity x price."""
@@ -243,13 +247,20 @@ class LedgerDocumentSink(DocumentSink):
         return payload
 
     def upsert_record(self, record, context):
-        """Skip create when a snapshot id or matching reference already exists."""
+        """Skip create when a snapshot id or matching posted transaction exists."""
         if record.get("id") is not None:
             return record["id"], True, {"existing": True}
         reference = record.get("reference")
-        if reference:
-            existing = self.find_by_field(
-                "/sales_posted_transactions", "reference", reference
+        customer_id = record.get("customer_id")
+        if reference and customer_id is not None:
+            existing = self.lookup(
+                "/sales_posted_transactions",
+                (
+                    f"reference eq {odata_string_literal(reference)} and "
+                    f"customer_id eq {customer_id} and "
+                    f"trader_transaction_type eq "
+                    f"{odata_string_literal(self.posted_transaction_type)}"
+                ),
             )
             if existing:
                 return existing.get("urn") or existing["id"], True, {"existing": True}
@@ -260,8 +271,10 @@ class LedgerDocumentSink(DocumentSink):
 class InvoicesSink(LedgerDocumentSink):
     name = "Invoices"
     endpoint = "/sales_invoices"
+    posted_transaction_type = "TradingAccountEntryTypeInvoice"
 
 
 class CreditNotesSink(LedgerDocumentSink):
     name = "CreditNotes"
     endpoint = "/sales_credit_notes"
+    posted_transaction_type = "TradingAccountEntryTypeCreditNote"
