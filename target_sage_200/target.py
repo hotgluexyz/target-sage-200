@@ -12,7 +12,12 @@ from target_sage_200.sinks import (
 )
 
 # Hotglue connect UI often stores typed number fields as strings.
-_INTEGER_CONFIG_KEYS = ("company_id", "warehouse_id")
+_INTEGER_CONFIG_KEYS = (
+    "company_id",
+    "warehouse_id",
+    "order_number_analysis_code",
+    "ref_analysis_code",
+)
 
 
 def _coerce_int_config(config: dict) -> None:
@@ -113,6 +118,23 @@ class TargetSage200(TargetHotglue):
                 "of CreditNotes. A SOP return does not credit the customer account "
                 "until it is processed in Sage, whereas a sales ledger credit note "
                 "posts immediately."
+            ),
+        ),
+        th.Property(
+            "order_number_analysis_code",
+            th.IntegerType,
+            description=(
+                "Connect UI option. Sage analysis code slot (1-20) that receives the "
+                "Fresho order number on SOP documents. Maps to analysis_code_N. "
+                "Defaults to 1."
+            ),
+        ),
+        th.Property(
+            "ref_analysis_code",
+            th.IntegerType,
+            description=(
+                "Connect UI option. Sage analysis code slot (1-20) that receives the "
+                "Fresho PO ref on SOP documents. Maps to analysis_code_N. Defaults to 2."
             ),
         ),
     ).to_dict()
