@@ -36,3 +36,20 @@ def test_target_accepts_blank_warehouse_id():
 def test_target_accepts_string_company_id():
     target = TargetSage200(config={**SAMPLE_CONFIG, "company_id": "2"}, validate_config=True)
     assert target.config["company_id"] == 2
+
+
+def test_target_accepts_import_as_sales_orders():
+    target = TargetSage200(
+        config={**SAMPLE_CONFIG, "import_as_sales_orders": True},
+        validate_config=True,
+    )
+    assert target.config["import_as_sales_orders"] is True
+
+
+def test_target_accepts_is_professional():
+    """The connect UI sends a real JSON boolean, so no coercion sits in between."""
+    target = TargetSage200(
+        config={**SAMPLE_CONFIG, "is_professional": False},
+        validate_config=True,
+    )
+    assert target.config["is_professional"] is False

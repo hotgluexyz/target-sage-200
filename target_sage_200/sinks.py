@@ -159,30 +159,31 @@ class SopDocumentSink(DocumentSink):
             self.build_line(line, position, record)
             for position, line in enumerate(record.get("lines") or [], start=1)
         ]
-        # Analysis codes are positional (analysis_code_1, _2, …). Label them in Sage
-        # as "F number" and "PO number" (Maintain Analysis Codes, free text) so the
-        # UI matches. Values are the record's order_number and ref.
-        payload = self.clean_payload({
+        # Analysis codes come from the ETL (order_number_analysis_code /
+        # ref_analysis_code → analysis_code_N). Pass them through as-is.
+        payload = {
             "customer_id": customer["id"],
             "document_date": _as_datetime(record.get("invoice_date")),
             "customer_document_no": record.get("ref"),
-            "analysis_code_1": record.get("order_number"),
-            "analysis_code_2": record.get("ref"),
             "lines": lines,
-        })
+        }
+        for key, value in record.items():
+            if key.startswith("analysis_code_") and value is not None:
+                payload[key] = value
+        payload = self.clean_payload(payload)
         if record.get("id") is not None:
             payload["id"] = record["id"]
         return payload
 
     def upsert_record(self, record, context):
-        """Skip create when a snapshot id or matching analysis_code_1 already exists."""
+        """Skip create when a snapshot id or matching order-number analysis code exists."""
         if record.get("id") is not None:
             return record["id"], True, {"existing": True}
-        analysis_code_1 = record.get("analysis_code_1")
-        if analysis_code_1:
-            existing = self.find_by_field(
-                self.endpoint, "analysis_code_1", analysis_code_1
-            )
+        analysis_code_slot = int(self.config.get("order_number_analysis_code") or 1)
+        sage_field = f"analysis_code_{analysis_code_slot}"
+        value = record.get(sage_field)
+        if value:
+            existing = self.find_by_field(self.endpoint, sage_field, value)
             if existing:
                 return existing["id"], True, {"existing": True}
         response = self.request_api("POST", request_data=record)
