@@ -498,6 +498,8 @@ def test_sales_order_includes_pricing(target):
             "ref": "P0599",
             "invoice_date": "2024-10-01",
             "customer_reference": "599Fresh",
+            "analysis_code_1": "599ONum",
+            "analysis_code_2": "P0599",
             "lines": [{
                 "product_code": "599IphoneX",
                 "quantity": 1.0,
@@ -555,6 +557,29 @@ def test_sales_order_skips_post_when_analysis_code_lookup_hits(target):
     assert state.get("existing")
     assert [c[0] for c in calls] == ["GET"]
     assert calls[0][1] == "/sop_orders"
+
+
+def test_sales_order_skips_post_when_configured_analysis_code_slot_hits(target):
+    target._config["order_number_analysis_code"] = 8
+    sink = SalesOrdersSink(target, "SalesOrders", SCHEMA, [])
+    calls = []
+
+    def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
+        calls.append((http_method, endpoint, params, request_data))
+        if http_method == "GET" and endpoint == "/sop_orders":
+            assert "analysis_code_8" in (params or {}).get("$filter", "")
+            return FakeResponse({"value": [{"id": 901, "analysis_code_8": "599ONum"}]})
+        return FakeResponse({"value": []})
+
+    sink.request_api = fake_request
+    record_id, success, state = sink.upsert_record(
+        {"analysis_code_8": "599ONum", "customer_id": 21, "lines": []},
+        {},
+    )
+    assert success
+    assert record_id == 901
+    assert state.get("existing")
+    assert [c[0] for c in calls] == ["GET"]
 
 
 def test_sales_order_lookup_miss_posts(target):
@@ -739,4 +764,6 @@ def test_sop_line_with_unknown_product_points_at_the_products_stream(target):
 def test_sales_return_is_registered_on_target():
     assert SalesReturnsSink in TargetSage200.SINK_TYPES
     assert "import_credits_as_sales_returns" in TargetSage200.config_jsonschema["properties"]
+    assert "order_number_analysis_code" in TargetSage200.config_jsonschema["properties"]
+    assert "ref_analysis_code" in TargetSage200.config_jsonschema["properties"]
     assert "allow_sop_pricing" not in TargetSage200.config_jsonschema["properties"]
