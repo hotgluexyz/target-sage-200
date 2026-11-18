@@ -1,3 +1,5 @@
+from singer_sdk.exceptions import FatalAPIError
+
 from target_sage_200.client import RecordMappingError, Sage200Sink, odata_string_literal
 
 
@@ -199,6 +201,20 @@ class SalesOrdersSink(SopDocumentSink):
 class SalesReturnsSink(SopDocumentSink):
     name = "SalesReturns"
     endpoint = "/sop_returns"
+
+    def find_by_field(self, endpoint, field, value):
+        """Treat Sage API misses on GET /sop_returns filters as a lookup miss.
+
+        Some Professional Native hosts return "No HTTP resource was found" for
+        GET /sop_returns?$filter=…" even though POST works. Soft-fail so
+        upsert can still create the return.
+        """
+        try:
+            return super().find_by_field(endpoint, field, value)
+        except FatalAPIError as exc:
+            if "No HTTP resource was found" not in str(exc):
+                raise
+            return None
 
 
 class LedgerDocumentSink(DocumentSink):

@@ -1,4 +1,5 @@
 import pytest
+from singer_sdk.exceptions import FatalAPIError
 
 from tests.test_core import SAMPLE_CONFIG
 from target_sage_200.client import (
@@ -660,6 +661,37 @@ def test_sales_return_posts_positive_lines_to_sop_returns(target):
     assert line["line_type"] == "EnumLineTypeStandard"
     assert line["selling_unit_price"] == 699.99
     assert line["unit_discount_percent"] == 10.0
+
+
+def test_sales_return_posts_when_analysis_code_lookup_has_no_http_resource(target):
+    """Native API route miss on /sop_returns filter must not block create."""
+    target._config["order_number_analysis_code"] = 8
+    sink = SalesReturnsSink(target, "SalesReturns", SCHEMA, [])
+    calls = []
+
+    def fake_request(http_method, endpoint=None, params=None, request_data=None, headers=None):
+        calls.append((http_method, endpoint, params, request_data))
+        if http_method == "GET" and endpoint == "/sop_returns":
+            raise FatalAPIError(
+                '{"Message":"No HTTP resource was found that matches the request URI '
+                "'https://afl-sage01:10443/Sage200NativeAPI/api/v1/sop_returns?"
+                "%24filter=analysis_code_8+eq+%27F61631621%27'.\"}"
+            )
+        if http_method == "POST":
+            return FakeResponse({"id": 903}, 201)
+        return FakeResponse({"value": []})
+
+    sink.request_api = fake_request
+    record_id, success, state = sink.upsert_record(
+        {"analysis_code_8": "F61631621", "customer_id": 21, "lines": []},
+        {},
+    )
+    assert success
+    assert record_id == 903
+    assert not state.get("existing")
+    assert [c[0] for c in calls] == ["GET", "POST"]
+    assert calls[0][1] == "/sop_returns"
+
 
 def test_product_without_code_names_the_stream_and_record(target):
     """A source line with no product code must not surface as KeyError: 'code'."""
