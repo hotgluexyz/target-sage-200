@@ -46,10 +46,10 @@ def test_target_accepts_import_as_sales_orders():
     assert target.config["import_as_sales_orders"] is True
 
 
-def test_target_accepts_is_professional():
+def test_target_accepts_is_standard():
     """The connect UI sends a real JSON boolean, so no coercion sits in between."""
     target = TargetSage200(
-        config={**SAMPLE_CONFIG, "is_professional": False},
+        config={**SAMPLE_CONFIG, "is_standard": True},
         validate_config=True,
     )
-    assert target.config["is_professional"] is False
+    assert target.config["is_standard"] is True

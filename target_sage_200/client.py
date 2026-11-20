@@ -57,19 +57,15 @@ class Sage200Sink(HotglueSink):
     def base_url(self):
         """Resolve the API root for this tenant's Sage 200 variant.
 
-        Professional is the default: it is what every tenant configured before the
-        flag existed was pointed at, so an absent or null value has to keep meaning
-        Professional rather than falling through to Standard. ``base_url`` stays
-        supported as an explicit override for regions outside the UK, whose roots
-        differ from both defaults by more than the variant segment.
+        Professional is the default (is_standard=False off/absent).
         """
         override = self.config.get("base_url")
         if override:
             return override
-        is_professional = self.config.get("is_professional")
-        if is_professional is None:
-            is_professional = True
-        return PROFESSIONAL_BASE_URL if is_professional else STANDARD_BASE_URL
+        # ON = Standard. Default / off = Professional
+        if self.config.get("is_standard") or self.config.get("is_professional") is False:
+            return STANDARD_BASE_URL
+        return PROFESSIONAL_BASE_URL
 
     @property
     def http_headers(self):
