@@ -58,24 +58,25 @@ def test_base_url_defaults_to_professional():
     assert base_url_for({}) == PROFESSIONAL_BASE_URL
 
 
-def test_base_url_follows_is_professional():
-    assert base_url_for({"is_professional": True}) == PROFESSIONAL_BASE_URL
+def test_base_url_follows_is_standard():
+    assert base_url_for({"is_standard": True}) == STANDARD_BASE_URL
+    assert base_url_for({"is_standard": False}) == PROFESSIONAL_BASE_URL
+
+
+def test_base_url_honors_legacy_is_professional_false():
     assert base_url_for({"is_professional": False}) == STANDARD_BASE_URL
-
-
-def test_base_url_treats_null_is_professional_as_professional():
-    assert base_url_for({"is_professional": None}) == PROFESSIONAL_BASE_URL
+    assert base_url_for({"is_professional": True}) == PROFESSIONAL_BASE_URL
 
 
 def test_base_url_override_wins_over_the_flag():
     override = "https://api.columbus.sage.com/ie/sage200extra/accounts/v1"
-    assert base_url_for({"base_url": override, "is_professional": False}) == override
+    assert base_url_for({"base_url": override, "is_standard": True}) == override
 
 
 def test_blank_base_url_falls_back_to_the_flag():
     """Existing connector configs carry base_url as an empty string."""
     assert base_url_for({"base_url": ""}) == PROFESSIONAL_BASE_URL
-    assert base_url_for({"base_url": "", "is_professional": False}) == STANDARD_BASE_URL
+    assert base_url_for({"base_url": "", "is_standard": True}) == STANDARD_BASE_URL
 
 
 def test_empty_schema_timestamp_parse_skips_unknown_keys(target):

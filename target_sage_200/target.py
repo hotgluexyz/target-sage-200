@@ -52,22 +52,19 @@ class TargetSage200(TargetHotglue):
         th.Property("site_id", th.StringType, required=True),
         th.Property("company_id", th.IntegerType, required=True),
         th.Property(
-            "is_professional",
+            "is_standard",
             th.BooleanType,
-            default=True,
+            default=False,
             description=(
-                "Connect UI option. True for Sage 200 Professional (formerly Extra), "
-                "false for Sage 200 Standard. The two variants are served by "
-                "different API roots, and calling the wrong one fails at "
-                "authorisation with no sites found rather than at request time. "
-                "Defaults to Professional."
+                "Connect UI option. When true, use Sage 200 Standard API URL "
+                "when false/absent, use Professional. "
             ),
         ),
         th.Property(
             "base_url",
             th.StringType,
             description=(
-                "Explicit API root, overriding is_professional. Only needed outside "
+                "Explicit API root, overriding is_standard. Only needed outside "
                 "the UK, where the region segment differs from both defaults."
             ),
         ),
