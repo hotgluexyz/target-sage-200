@@ -1,5 +1,5 @@
 import pytest
-from singer_sdk.exceptions import FatalAPIError
+from hotglue_singer_sdk.exceptions import FatalAPIError
 
 from tests.test_core import SAMPLE_CONFIG
 from target_sage_200.client import (

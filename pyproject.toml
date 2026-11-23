@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "target-sage-200"
 version = "0.0.1"
-description = "`target-sage-200` is a Singer target for Sage200, built with the Meltano Singer SDK."
+description = "`target-sage-200` is a Singer target for Sage200, built with the Hotglue Singer SDK."
 readme = "README.md"
 authors = ["Jacob Mazurkiewicz <jacob@hotglue.io>"]
 keywords = [
@@ -12,7 +12,7 @@ license = "Apache-2.0"
 
 [tool.poetry.dependencies]
 python = "<3.12,>=3.7.1"
-target-hotglue = {git = "https://gitlab.com/hotglue/target-hotglue-sdk.git"}
+hotglue-singer-sdk = "^1.0.54"
 requests = "^2.31.0"
 xmltodict = "^0.13.0"
 
