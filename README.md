@@ -4,8 +4,7 @@ A Singer target that loads customers, products and sales documents into
 [Sage 200](https://developer.columbus.sage.com/docs) (Standard/Professional, UK),
 plus the ETL script that turns Fresho order XML into the records it expects.
 
-Built with the [Meltano Singer SDK](https://sdk.meltano.com) on top of
-`target-hotglue`.
+Built with the [Hotglue Singer SDK](https://github.com/hotgluexyz/HotglueSingerSDK).
 
 ## How it fits together
 

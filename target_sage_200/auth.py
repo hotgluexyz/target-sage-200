@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 
 import requests
-from target_hotglue.auth import OAuthAuthenticator
+from hotglue_singer_sdk.target_sdk.auth import OAuthAuthenticator
 
 
 AUTH_ENDPOINT = "https://id.sage.com/oauth/token"

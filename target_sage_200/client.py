@@ -1,11 +1,11 @@
 from dateutil import parser
-from singer_sdk.exceptions import FatalAPIError, RetriableAPIError
-from singer_sdk.helpers._typing import (
+from hotglue_singer_sdk.exceptions import FatalAPIError, RetriableAPIError
+from hotglue_singer_sdk.helpers._typing import (
     DatetimeErrorTreatmentEnum,
     get_datelike_property_type,
     handle_invalid_timestamp_in_record,
 )
-from target_hotglue.client import HotglueSink
+from hotglue_singer_sdk.target_sdk.client import HotglueSink
 
 from target_sage_200.auth import Sage200Authenticator
 

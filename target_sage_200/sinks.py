@@ -1,4 +1,4 @@
-from singer_sdk.exceptions import FatalAPIError
+from hotglue_singer_sdk.exceptions import FatalAPIError
 
 from target_sage_200.client import RecordMappingError, Sage200Sink, odata_string_literal
 
